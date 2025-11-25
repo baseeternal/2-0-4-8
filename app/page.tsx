@@ -1,119 +1,124 @@
-"use client";
-import { useState, useEffect } from "react";
-import { useQuickAuth,useMiniKit } from "@coinbase/onchainkit/minikit";
-import { useRouter } from "next/navigation";
-import { minikitConfig } from "../minikit.config";
-import styles from "./page.module.css";
+'use client';
+import React, { useState, useEffect } from 'react';
+import { useSwipeable } from 'react-swipeable';
+import './2048.css';
 
-interface AuthResponse {
-  success: boolean;
-  user?: {
-    fid: number; // FID is the unique identifier for the user
-    issuedAt?: number;
-    expiresAt?: number;
-  };
-  message?: string; // Error messages come as 'message' not 'error'
-}
+const SIZE = 4;
 
+const getEmptyBoard = () => Array(SIZE).fill(0).map(() => Array(SIZE).fill(0));
+const getRandomInt = (max: number) => Math.floor(Math.random() * max);
+const cloneBoard = (board: number[][]) => board.map(row => [...row]);
+const addRandomTile = (board: number[][]) => {
+  const empty: [number, number][] = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) if (board[r][c] === 0) empty.push([r,c]);
+  if (!empty.length) return board;
+  const [r,c] = empty[getRandomInt(empty.length)];
+  board[r][c] = Math.random() < 0.9 ? 2 : 4;
+  return board;
+};
 
-export default function Home() {
-  const { isFrameReady, setFrameReady, context } = useMiniKit();
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState("");
-  const router = useRouter();
+export default function Game2048() {
+  const [board, setBoard] = useState<number[][]>(getEmptyBoard());
+  const [score, setScore] = useState(0);
+  const [topScore, setTopScore] = useState(0);
+  const [leaderboard, setLeaderboard] = useState<{name:string,score:number}[]>([]);
 
-  // Initialize the  miniapp
   useEffect(() => {
-    if (!isFrameReady) {
-      setFrameReady();
-    }
-  }, [setFrameReady, isFrameReady]);
- 
-  
+    setBoard(addRandomTile(getEmptyBoard()));
+    const saved = localStorage.getItem('topScore');
+    if (saved) setTopScore(parseInt(saved));
+    fetchLeaderboard();
+  }, []);
 
-  // If you need to verify the user's identity, you can use the useQuickAuth hook.
-  // This hook will verify the user's signature and return the user's FID. You can update
-  // this to meet your needs. See the /app/api/auth/route.ts file for more details.
-  // Note: If you don't need to verify the user's identity, you can get their FID and other user data
-  // via `context.user.fid`.
-  // const { data, isLoading, error } = useQuickAuth<{
-  //   userFid: string;
-  // }>("/api/auth");
+  useEffect(() => localStorage.setItem('topScore', topScore.toString()), [topScore]);
 
-  const { data: authData, isLoading: isAuthLoading, error: authError } = useQuickAuth<AuthResponse>(
-    "/api/auth",
-    { method: "GET" }
-  );
-
-  const validateEmail = (email: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+  const fetchLeaderboard = async () => {
+    try {
+      const res = await fetch('/api/leaderboard');
+      const data = await res.json();
+      setLeaderboard(data);
+    } catch { setLeaderboard([]); }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
+  const handleMove = (dir: string) => {
+    let newBoard = cloneBoard(board);
+    let moved = false;
 
-    // Check authentication first
-    if (isAuthLoading) {
-      setError("Please wait while we verify your identity...");
-      return;
-    }
+    const moveRowLeft = (row: number[]) => {
+      let newRow = row.filter(v=>v!==0);
+      for(let i=0;i<newRow.length-1;i++){
+        if(newRow[i]===newRow[i+1]){
+          newRow[i]*=2;
+          setScore(prev=>{const upd = prev+newRow[i]; if(upd>topScore) setTopScore(upd); return upd;});
+          newRow[i+1]=0;
+        }
+      }
+      newRow=newRow.filter(v=>v!==0);
+      while(newRow.length<SIZE) newRow.push(0);
+      return newRow;
+    };
 
-    if (authError || !authData?.success) {
-      setError("Please authenticate to join the waitlist");
-      return;
-    }
+    if(dir==='left') newBoard=newBoard.map(moveRowLeft);
+    if(dir==='right') newBoard=newBoard.map(r=>moveRowLeft(r.reverse()).reverse());
+    if(dir==='up') for(let c=0;c<SIZE;c++){const col=moveRowLeft(newBoard.map(r=>r[c])); for(let r=0;r<SIZE;r++) newBoard[r][c]=col[r];}
+    if(dir==='down') for(let c=0;c<SIZE;c++){const col=moveRowLeft(newBoard.map(r=>r[c]).reverse()).reverse(); for(let r=0;r<SIZE;r++) newBoard[r][c]=col[r];}
 
-    if (!email) {
-      setError("Please enter your email address");
-      return;
-    }
+    if(JSON.stringify(newBoard)!==JSON.stringify(board)) moved=true;
+    if(moved) setBoard(addRandomTile(newBoard));
+  };
 
-    if (!validateEmail(email)) {
-      setError("Please enter a valid email address");
-      return;
-    }
+  useEffect(()=>{
+    const handleKey=(e:KeyboardEvent)=>{
+      if(e.key==='ArrowUp') handleMove('up');
+      if(e.key==='ArrowDown') handleMove('down');
+      if(e.key==='ArrowLeft') handleMove('left');
+      if(e.key==='ArrowRight') handleMove('right');
+    };
+    window.addEventListener('keydown',handleKey);
+    return ()=>window.removeEventListener('keydown',handleKey);
+  },[board]);
 
-    // TODO: Save email to database/API with user FID
-    console.log("Valid email submitted:", email);
-    console.log("User authenticated:", authData.user);
-    
-    // Navigate to success page
-    router.push("/success");
+  const handlers = useSwipeable({
+    onSwipedLeft:()=>handleMove('left'),
+    onSwipedRight:()=>handleMove('right'),
+    onSwipedUp:()=>handleMove('up'),
+    onSwipedDown:()=>handleMove('down'),
+  });
+
+  const restartGame=()=>{ setBoard(addRandomTile(getEmptyBoard())); setScore(0); };
+  const submitScore=async()=>{
+    const name = prompt('Enter your name for leaderboard');
+    if(!name) return;
+    await fetch('/api/leaderboard',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,score}),
+    });
+    fetchLeaderboard();
   };
 
   return (
-    <div className={styles.container}>
-      <button className={styles.closeButton} type="button">
-        ✕
-      </button>
-      
-      <div className={styles.content}>
-        <div className={styles.waitlistForm}>
-          <h1 className={styles.title}>Join {minikitConfig.miniapp.name.toUpperCase()}</h1>
-          
-          <p className={styles.subtitle}>
-             Hey {context?.user?.displayName || "there"}, Get early access and be the first to experience the future of<br />
-            crypto marketing strategy.
-          </p>
+    <div {...handlers} className="game-container">
+      <h1>2048</h1>
+      <h2>Score: {score}</h2>
+      <h3>Top Score: {topScore}</h3>
 
-          <form onSubmit={handleSubmit} className={styles.form}>
-            <input
-              type="email"
-              placeholder="Your amazing email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className={styles.emailInput}
-            />
-            
-            {error && <p className={styles.error}>{error}</p>}
-            
-            <button type="submit" className={styles.joinButton}>
-              JOIN WAITLIST
-            </button>
-          </form>
-        </div>
+      <div style={{display:'flex',gap:'10px',marginTop:'10px'}}>
+        <button onClick={restartGame}>Restart Game</button>
+        <button onClick={submitScore}>Submit Score</button>
+      </div>
+
+      <div className="board" style={{marginTop:'20px'}}>
+        {board.map((row,i)=>row.map((cell,j)=>(
+          <div key={`${i}-${j}`} className={`cell cell-${cell}`}>{cell!==0?cell:''}</div>
+        )))}
+      </div>
+
+      <div className="leaderboard">
+        <h2>Leaderboard</h2>
+        <ol>
+          {leaderboard.map((p,i)=><li key={i}>{p.name}: {p.score}</li>)}
+        </ol>
       </div>
     </div>
   );
